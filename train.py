@@ -21,6 +21,8 @@ import torch
 import torch.nn.functional as F
 from skorch import NeuralNetClassifier
 
+from matplotlib import pyplot
+
 from tqdm import tqdm
 
 # Directory with data files (data_base.csv, data_posneg.csv, etc)
@@ -39,9 +41,6 @@ class SmallDeepNet(torch.nn.Module):
         self.nb_classes = nb_classes
         self.embedding_dim = embedding_dim
 
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=0.01,
-                                         momentum=0.9)
         self.classifier = torch.nn.Sequential(
             torch.nn.Linear(self.embedding_dim, self.hidden_size),
             torch.nn.ELU(),
@@ -51,6 +50,9 @@ class SmallDeepNet(torch.nn.Module):
             torch.nn.ELU(),
             torch.nn.Linear(self.hidden_size, self.nb_classes),
         )
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.SGD(self.parameters(), lr=0.01,
+                                         momentum=0.9)
 
     def forward(self, inputs):
         logits = self.classifier(inputs)
@@ -102,6 +104,13 @@ def load_data(filename):
 
     return samples, labels
 
+
+def plot(total_loss):
+    pyplot.plot(total_loss)
+    pyplot.title('loss')
+    pyplot.xlabel('epoch')
+    pyplot.ylabel('loss')
+    pyplot.show()
 
 def create_data_matrix_embeddings(samples, word_embeddings):
     embeddings_dim = len(word_embeddings.matrix[0])
@@ -225,9 +234,9 @@ def create_training_data(mode, labels_mode):
 
 
 def score_model(model, X, y_true, labels):
-    y_pred = model.predict(X)
+    _, y_pred = torch.max(model.forward(X), 1)
 
-    if len(set(y_true)) == 2:
+    if len(set(labels)) == 2:
         average = 'binary'
         pos_label = int(np.argwhere(labels != 'rest'))
     else:
@@ -263,11 +272,25 @@ def main():
     scaler = StandardScaler()
     scaler.fit(X_train)
 
-    X_train = scaler.transform(X_train)
+    X_train = torch.tensor(scaler.transform(X_train), requires_grad = False)
+    y_train = torch.tensor(y_train, requires_grad = False)
 
     classifier = SmallDeepNet(len(X_train[0,:]), 100, 5)
-    epoch = 50
+
+    epoch = range(1, 50)
+    total_loss = list()
     for i in epoch:
+        output = classifier(X_train)
+
+        loss = classifier.backward(output, y_train)
+
+        total_loss.append(float(loss.item()))
+
+        # print('epoch: ', epoch, ' loss: ', loss.item()))
+        print('[%d] loss: %.3f' %
+                (i, loss.item()))
+    plot(total_loss)
+
     # net = NeuralNetClassifier(
     #     SmallDeepNet(
     #         embedding_dim=X_train.shape[1],
@@ -290,14 +313,8 @@ def main():
     # for model in models:
     #     model.fit(X_train, y_train)  # , sample_weight=sample_weight
     #
-    #     result = score_model(model, X_train, y_train, label_encoder.classes_)
-    #     results.append(result)
-    #
-    # print('===== RESULTS =====')
-    # for model, (accuracy_train, f1_train, precision_train, recall_train) in zip(models, results):
-    #     model_name = model.__class__.__name__
-    #     print(f'{model_name}: F1 train {f1_train:.3f}')
 
-
+    result = [score_model(classifier, X_train, y_train, label_encoder.classes_)]
+    print(result)
 if __name__ == '__main__':
     main()
