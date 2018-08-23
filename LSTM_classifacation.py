@@ -27,7 +27,7 @@ class RNN(torch.nn.Module):
 
         self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
         self.i2o = torch.nn.Linear(200, output_size)
-        self.i2i = torch.nn.Linear(input_size + hidden_size,
+        self.i2i = torch.nn.Linear(hidden_size,
                                    200)
         self.elu = torch.nn.ELU()
         self.softmax = torch.nn.LogSoftmax(dim=-1)
@@ -35,7 +35,7 @@ class RNN(torch.nn.Module):
     def forward(self, input, hidden):
         combined = torch.cat((input, hidden), 1)
         hidden = self.i2h(combined)
-        output = self.i2i(combined)
+        output = self.i2i(hidden)
         output = self.elu(output)
         output = self.i2o(output)
         output = self.softmax(output)
@@ -95,11 +95,11 @@ class Data:
 
         example_num = 0
         for i, sample in enumerate(samples):
-            sequence = torch.zeros((20, 1, embeddings_dim), dtype=torch.float)
+            sequence = torch.zeros((100, 1, embeddings_dim), dtype=torch.float)
             tokens = sample.split(' ')
             tokens_embeddings = [word_embeddings.get_vector(t) for t in tokens
                                  if
-                                 word_embeddings.has_word(t)][:20]
+                                 word_embeddings.has_word(t)][:100]
             if len(tokens_embeddings) > 0:
                 for j in range(0, len(tokens_embeddings)):
                     line = torch.from_numpy(tokens_embeddings[j])
@@ -286,7 +286,6 @@ def score_model(classifier, examples, data):
     for i in examples:
         hidden = classifier.initHidden()
         sequence = examples[i]['sequence']
-        sequence = data.scaler.transform(sequence)
         outputs = []
         for j in range(sequence.size()[0]):
             line = torch.FloatTensor(data.scaler.transform(sequence[j]))
@@ -329,7 +328,7 @@ def main():
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
 
     data = Data()
-    train_examples, test_examples = data.load_data_from_dataset('base',
+    train_examples, test_examples = data.load_data_from_dataset('debug',
                                                               'base', embedding_file,
                                   data_file)
 
@@ -337,10 +336,11 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 300, 5)
-    criterion = torch.nn.NLLLoss()
-    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001,
-                                momentum=0.9)
+    classifier = RNN(300, 500, 5)
+    #criterion = torch.nn.NLLLoss()
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.01,
+                                weight_decay=3)
     #learning_rate = .01
     total_loss = []
     for epoch in range(0,1):
@@ -352,6 +352,8 @@ def main():
             sequence = train_examples[i]['sequence']
             outputs = []
             for j in range(sequence.size()[0]):
+                if sequence[j][0][0] == 0 and sequence[j][0][1] == 0:
+                    break
                 line = torch.FloatTensor(data.scaler.transform(sequence[j]))
                 output, hidden = classifier(line, hidden)
                 outputs.append(output)
@@ -360,16 +362,18 @@ def main():
             target = train_examples[i]['target']
             loss = criterion(output, target)
             total_loss.append(loss.item())
+
+            average_loss = sum(total_loss)/len(total_loss)
+            print(i, loss.item(), average_loss, target, output)
             if i % 99 == 1:
-                average_loss = sum(total_loss)/len(total_loss)
-                print(i, loss.item(), average_loss, target, output)
+                total_loss = []
             loss.backward()
 
             # Add parameters' gradients to their values, multiplied by learning rate
             #for p in classifier.parameters():
             #    p.data.add_(-learning_rate, p.grad.data)
             optimizer.step()
-
+        plot(total_loss)
         result = score_model(classifier, test_examples,
                              data)
         #results['result'] = result
