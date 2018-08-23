@@ -26,13 +26,18 @@ class RNN(torch.nn.Module):
         self.hidden_size = hidden_size
 
         self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
-        self.i2o = torch.nn.Linear(input_size + hidden_size, output_size)
-        self.softmax = torch.nn.LogSoftmax(dim=1)
+        self.i2o = torch.nn.Linear(200, output_size)
+        self.i2i = torch.nn.Linear(input_size + hidden_size,
+                                   200)
+        self.elu = torch.nn.ELU()
+        self.softmax = torch.nn.LogSoftmax(dim=-1)
 
     def forward(self, input, hidden):
         combined = torch.cat((input, hidden), 1)
         hidden = self.i2h(combined)
-        output = self.i2o(combined)
+        output = self.i2i(combined)
+        output = self.elu(output)
+        output = self.i2o(output)
         output = self.softmax(output)
         return output, hidden
 
@@ -40,50 +45,10 @@ class RNN(torch.nn.Module):
         return torch.zeros(1, self.hidden_size)
 
 
-
-class SmallDeepNet(torch.nn.Module):
-    def __init__(self, embedding_dim, hidden_size, nb_classes):
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        self.nb_classes = nb_classes
-        self.embedding_dim = embedding_dim
-
-        self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(self.embedding_dim, self.hidden_size),
-            torch.nn.ELU(),
-            torch.nn.Linear(self.hidden_size, self.hidden_size),
-            torch.nn.ELU(),
-            torch.nn.Linear(self.hidden_size, self.hidden_size),
-            torch.nn.ELU(),
-            torch.nn.Linear(self.hidden_size, self.nb_classes),
-        )
-        self.criterion = torch.nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=0.5,
-                                         momentum=0.9)
-
-    def forward(self, inputs):
-        logits = self.classifier(inputs)
-        outputs = F.softmax(logits, dim=-1)
-
-        return outputs
-
-    def backward(self, y_pred, target):
-        loss = self.criterion(y_pred, target)
-
-        # Zero the gradients
-        self.optimizer.zero_grad()
-
-        # perform a backward pass (backpropagation)
-        loss.backward()
-
-        # Update the parameters
-        self.optimizer.step()
-        return loss
-
 class Data:
     def __init__(self):
         self.metadata = dict()
+        self.scaler = StandardScaler()
 
     def load_data_from_dataset(self, mode, labels_mode, embedding_file,
                                   data_file):
@@ -107,33 +72,44 @@ class Data:
         self.metadata['labels'] = label_encoder.classes_
 
 
-        self.X_train = self.create_data_matrix_embeddings(samples_train,
-                                                       embeddings)
-        self.y_train = label_encoder.transform(labels_train)
-        print(f'Train data: {len(self.X_train)}, {self.y_train.shape}')
-        self.metadata['Train data'] = [len(self.X_train), self.y_train.shape]
+        train_examples = self.create_data_matrix_embeddings(
+            samples_train, labels_train, embeddings)
+        train_examples = self.add_target(train_examples, label_encoder)
+        #print(f'Train data: {len(self.X_train)}, {self.y_train.shape}')
+        #self.metadata['Train data'] = [len(self.X_train), self.y_train.shape]
 
-        self.X_test = self.create_data_matrix_embeddings(samples_test,
-                                                        embeddings)
-        self.y_test = label_encoder.transform(labels_test)
-        print(f'Test data: {len(self.X_test)}, {self.y_test.shape}')
-        self.metadata['Test data'] = [len(self.X_test), self.y_test.shape]
+        test_examples = self.create_data_matrix_embeddings(
+            samples_test, labels_test, embeddings)
+        test_examples = self.add_target(test_examples, label_encoder)
+        #print(f'Test data: {len(self.X_test)}, {self.y_test.shape}')
+        #self.metadata['Test data'] = [len(self.X_test), self.y_test.shape]
 
-    def create_data_matrix_embeddings(self, samples, word_embeddings):
+        return train_examples, test_examples
+
+    def create_data_matrix_embeddings(self, samples, labels, word_embeddings):
         embeddings_dim = len(word_embeddings.matrix[0])
         nb_samples = len(samples)
-        X = list()
+        examples = dict()
 
-        nb_empty = 0
+        nb_empty = int(0)
+
+        example_num = 0
         for i, sample in enumerate(samples):
             sequence = torch.zeros((20, 1, embeddings_dim), dtype=torch.float)
             tokens = sample.split(' ')
             tokens_embeddings = [word_embeddings.get_vector(t) for t in tokens
                                  if
                                  word_embeddings.has_word(t)][:20]
-            for i in range(0, len(tokens_embeddings)):
-                sequence[i][0] = torch.from_numpy(tokens_embeddings[i])
-            X.append(sequence)
+            if len(tokens_embeddings) > 0:
+                for j in range(0, len(tokens_embeddings)):
+                    line = torch.from_numpy(tokens_embeddings[j])
+                    sequence[j][0] = line
+                    if line[0] != 0:
+                        self.scaler.fit(line.view(-1,1))
+
+                examples[example_num] = {"text":sample, "label":labels[i],
+                               "sequence":sequence}
+                example_num +=1
             if len(tokens_embeddings) == 0:
                 nb_empty += 1
 
@@ -141,9 +117,14 @@ class Data:
 
         self.metadata['Empty samples'] = nb_empty
 
-        return X
+        return examples
 
-
+    def add_target(self, examples, label_encoder):
+        for i in examples:
+            label = [str(examples[i]['label'])]
+            target = label_encoder.transform(label)
+            examples[i]['target'] = torch.tensor(target)
+        return examples
 
 def load_embeddings(embedding_file):
     try:
@@ -299,18 +280,26 @@ def plot(total_loss):
     pyplot.show()
 
 
-def score_model(classifier, X, y_true, labels):
-    y_pred = torch.zeros(y_true.shape)
-
-    for j, x in enumerate(X):
+def score_model(classifier, examples, data):
+    y_pred = torch.zeros(len(examples))
+    y_true = torch.zeros(len(examples))
+    for i in examples:
         hidden = classifier.initHidden()
+        sequence = examples[i]['sequence']
+        sequence = data.scaler.transform(sequence)
+        outputs = []
+        for j in range(sequence.size()[0]):
+            line = torch.FloatTensor(data.scaler.transform(sequence[j]))
+            output, hidden = classifier(line, hidden)
+            outputs.append(output)
 
-        for i in range(x.size()[0]):
-            output, hidden = classifier(x[i], hidden)
+            #output = sum(outputs) / len(outputs)
 
-        _, y_pred[j] = torch.max(output, 1)
-
+        _, y_pred[i] = torch.max(output, 1)
+        y_true[i] = examples[i]['target']
+        print(f'example: {i} predicted: {y_pred[i]} actual:{y_true[i]}')
         #print(labels[])
+    labels = data.metadata['labels']
     if len(set(labels)) == 2:
         average = 'binary'
         pos_label = int(np.argwhere(labels != 'rest'))
@@ -340,43 +329,49 @@ def main():
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
 
     data = Data()
-    data.load_data_from_dataset('posneg_only', 'base', embedding_file,
+    train_examples, test_examples = data.load_data_from_dataset('base',
+                                                              'base', embedding_file,
                                   data_file)
 
     #scaler = StandardScaler()
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    X_train = data.X_train
-    y_train = torch.tensor(data.y_train, requires_grad = False)
-    X_test = data.X_test
-    y_test = torch.tensor(data.y_test, requires_grad=False)
-
-
-    classifier = RNN(300, 128, 5)
+    classifier = RNN(300, 300, 5)
     criterion = torch.nn.NLLLoss()
-    learning_rate = .001
-
-    for epoch in range(0,2):
-        for i, example in enumerate(X_train):
+    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001,
+                                momentum=0.9)
+    #learning_rate = .01
+    total_loss = []
+    for epoch in range(0,1):
+        for i in train_examples:
             hidden = classifier.initHidden()
 
-            classifier.zero_grad()
+            optimizer.zero_grad()
 
-            for i in range(example.size()[0]):
-                output, hidden = classifier(example[i], hidden)
+            sequence = train_examples[i]['sequence']
+            outputs = []
+            for j in range(sequence.size()[0]):
+                line = torch.FloatTensor(data.scaler.transform(sequence[j]))
+                output, hidden = classifier(line, hidden)
+                outputs.append(output)
 
-            target = torch.tensor([y_train[i]])
+            #output = sum(outputs)/len(outputs)
+            target = train_examples[i]['target']
             loss = criterion(output, target)
+            total_loss.append(loss.item())
+            if i % 99 == 1:
+                average_loss = sum(total_loss)/len(total_loss)
+                print(i, loss.item(), average_loss, target, output)
             loss.backward()
 
             # Add parameters' gradients to their values, multiplied by learning rate
-            for p in classifier.parameters():
-                p.data.add_(-learning_rate, p.grad.data)
+            #for p in classifier.parameters():
+            #    p.data.add_(-learning_rate, p.grad.data)
+            optimizer.step()
 
-
-        result = score_model(classifier, X_test, y_test,
-                             data.metadata['labels'])
+        result = score_model(classifier, test_examples,
+                             data)
         #results['result'] = result
         #results['metadata'] = data.metadata
         print(result)
