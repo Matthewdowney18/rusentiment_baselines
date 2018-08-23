@@ -26,22 +26,20 @@ class RNN(torch.nn.Module):
         self.hidden_size = hidden_size
 
         self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
-        self.i2o = torch.nn.Linear(200, output_size)
-        self.i2i = torch.nn.Linear(hidden_size,
-                                   200)
-        self.elu = torch.nn.ELU()
-        self.softmax = torch.nn.LogSoftmax(dim=-1)
+
+        self.h2o = torch.nn.Sequential(
+            torch.nn.Linear(self.hidden_size, self.hidden_size),
+            torch.nn.ELU(),
+            torch.nn.Linear(self.hidden_size, output_size),
+            torch.nn.LogSoftmax(dim=-1))
 
     def forward(self, input, hidden):
         combined = torch.cat((input, hidden), 1)
         hidden = self.i2h(combined)
-        output = self.i2i(hidden)
-        output = self.elu(output)
-        output = self.i2o(output)
-        output = self.softmax(output)
+        output = self.h2o(hidden)
         return output, hidden
 
-    def initHidden(self):
+    def init_hidden(self):
         return torch.zeros(1, self.hidden_size)
 
 
@@ -95,13 +93,16 @@ class Data:
 
         example_num = 0
         for i, sample in enumerate(samples):
-            sequence = torch.zeros((100, 1, embeddings_dim), dtype=torch.float)
             tokens = sample.split(' ')
             tokens_embeddings = [word_embeddings.get_vector(t) for t in tokens
                                  if
-                                 word_embeddings.has_word(t)][:100]
-            if len(tokens_embeddings) > 0:
-                for j in range(0, len(tokens_embeddings)):
+                                 word_embeddings.has_word(t)]
+            length = len(tokens_embeddings)
+
+            if length > 0:
+                sequence = torch.zeros((length, 1, embeddings_dim),
+                                       dtype=torch.float)
+                for j in range(0, length):
                     line = torch.from_numpy(tokens_embeddings[j])
                     sequence[j][0] = line
                     if line[0] != 0:
@@ -205,7 +206,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 2000
+        nb_samples_debug = 4000
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -284,7 +285,7 @@ def score_model(classifier, examples, data):
     y_pred = torch.zeros(len(examples))
     y_true = torch.zeros(len(examples))
     for i in examples:
-        hidden = classifier.initHidden()
+        hidden = classifier.init_hidden()
         sequence = examples[i]['sequence']
         outputs = []
         for j in range(sequence.size()[0]):
@@ -296,7 +297,8 @@ def score_model(classifier, examples, data):
 
         _, y_pred[i] = torch.max(output, 1)
         y_true[i] = examples[i]['target']
-        print(f'example: {i} predicted: {y_pred[i]} actual:{y_true[i]}')
+        print(f'example: {i} predicted: {y_pred[i]} actual:{y_true[i]} '
+              f'output:{output}')
         #print(labels[])
     labels = data.metadata['labels']
     if len(set(labels)) == 2:
@@ -336,24 +338,23 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 500, 5)
+    classifier = RNN(300, 100, 5)
     #criterion = torch.nn.NLLLoss()
     criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.01,
-                                weight_decay=3)
+    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001,
+                                weight_decay=0.1)
     #learning_rate = .01
     total_loss = []
     for epoch in range(0,1):
         for i in train_examples:
-            hidden = classifier.initHidden()
+            hidden = classifier.init_hidden()
 
             optimizer.zero_grad()
 
             sequence = train_examples[i]['sequence']
             outputs = []
             for j in range(sequence.size()[0]):
-                if sequence[j][0][0] == 0 and sequence[j][0][1] == 0:
-                    break
+
                 line = torch.FloatTensor(data.scaler.transform(sequence[j]))
                 output, hidden = classifier(line, hidden)
                 outputs.append(output)
