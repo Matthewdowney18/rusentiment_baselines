@@ -1,5 +1,6 @@
 import csv
-import re
+import os
+import json
 from collections import defaultdict, Counter
 import functools
 from pathlib import Path
@@ -20,18 +21,26 @@ from matplotlib import pyplot
 
 class RNN(torch.nn.Module):
 
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, input_size, hidden_size, output_size, weight_decay, lr):
         super(RNN, self).__init__()
 
         self.hidden_size = hidden_size
-
         self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
-
         self.h2o = torch.nn.Sequential(
             torch.nn.Linear(self.hidden_size, self.hidden_size),
             torch.nn.ELU(),
             torch.nn.Linear(self.hidden_size, output_size),
             torch.nn.LogSoftmax(dim=-1))
+
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.SGD(self.parameters(), lr=lr,
+                                    weight_decay=weight_decay)
+        self.metadata = dict()
+        self.metadata['input_size'] = input_size
+        self.metadata['hidden_size'] = hidden_size
+        self.metadata['output_size'] = output_size
+        self.metadata['weight_decay'] = weight_decay
+        self.metadata['lr'] = lr
 
     def forward(self, input, hidden):
         combined = torch.cat((input, hidden), 1)
@@ -42,6 +51,15 @@ class RNN(torch.nn.Module):
     def init_hidden(self):
         return torch.zeros(1, self.hidden_size)
 
+    def backward(self, output, target):
+        self.optimizer.zero_grad()
+        loss = self.criterion(output, target)
+        loss.backward()
+        self.optimizer.step()
+        # Add parameters' gradients to their values, multiplied by learning rate
+        # for p in classifier.parameters():
+        #    p.data.add_(-learning_rate, p.grad.data)
+        return loss
 
 class Data:
     def __init__(self):
@@ -54,11 +72,12 @@ class Data:
         metadata = create_data(data_file, mode, labels_mode)
         self.metadata['dataset'] = metadata
 
-        self.metadata['mode'] = mode
-        self.metadata['labels_mode'] = labels_mode
+
 
         print(f'Data train: {len(samples_train)}')
         print(f'Labels train: {Counter(labels_train)}')
+        self.metadata['data train'] = len(samples_train)
+        self.metadata['labels train'] = Counter(labels_train)
 
         embeddings = load_embeddings(embedding_file)
         print(f'Word embeddings: {len(embeddings.vocabulary.lst_words)}')
@@ -67,20 +86,19 @@ class Data:
         label_encoder = LabelEncoder()
         label_encoder.fit(labels_train)
         print(f'Labels: {label_encoder.classes_}')
-        self.metadata['labels'] = label_encoder.classes_
-
+        self.labels = label_encoder.classes_
 
         train_examples = self.create_data_matrix_embeddings(
             samples_train, labels_train, embeddings)
         train_examples = self.add_target(train_examples, label_encoder)
         #print(f'Train data: {len(self.X_train)}, {self.y_train.shape}')
-        #self.metadata['Train data'] = [len(self.X_train), self.y_train.shape]
+        self.metadata['Train data'] = len(train_examples)
 
         test_examples = self.create_data_matrix_embeddings(
             samples_test, labels_test, embeddings)
         test_examples = self.add_target(test_examples, label_encoder)
         #print(f'Test data: {len(self.X_test)}, {self.y_test.shape}')
-        #self.metadata['Test data'] = [len(self.X_test), self.y_test.shape]
+        self.metadata['Test data'] = [len(test_examples)]
 
         return train_examples, test_examples
 
@@ -161,6 +179,15 @@ def create_data(data_file, mode, labels_mode):
     print(f'Labels: {len(set(labels_base_train))},'
           f' {len(set(labels_base_train))}, {len(set(labels_test))}')
 
+    metadata['mode'] = mode
+    metadata['labels_mode'] = labels_mode
+    metadata['Data base'] =  [len(samples_base_train),
+        len(labels_base_train)]
+    metadata['Data posneg'] = [len(samples_posneg_train),
+        len(labels_posneg_train)]
+    metadata['Labels'] = [len(set(labels_base_train)),
+        len(set(labels_base_train)), len(set(labels_test))]
+
     if mode == 'base':
         samples_train = samples_base_train
         labels_train = labels_base_train
@@ -206,7 +233,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 4000
+        nb_samples_debug = 100
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -300,7 +327,7 @@ def score_model(classifier, examples, data):
         print(f'example: {i} predicted: {y_pred[i]} actual:{y_true[i]} '
               f'output:{output}')
         #print(labels[])
-    labels = data.metadata['labels']
+    labels = data.labels
     if len(set(labels)) == 2:
         average = 'binary'
         pos_label = int(np.argwhere(labels != 'rest'))
@@ -319,10 +346,21 @@ def score_model(classifier, examples, data):
 
     return results
 
+def save_json(results, filename):
+    basedir = os.path.dirname(
+        '/home/mattd/projects/tmp/sentiment/results/')
+    os.makedirs(basedir, exist_ok=True)
+    info = json.dumps(results, ensure_ascii=False, indent=4,
+                      sort_keys=False)
+    file = open('/home/mattd/projects/tmp/sentiment/results/'
+                '' + filename + '.json', 'w')
+    file.write(info)
+    file.close()
+
 
 
 def main():
-    results = dict
+    results = dict()
     # Directory with data files (data_base.csv, data_posneg.csv, etc)
     data_file = Path('./')
 
@@ -330,7 +368,7 @@ def main():
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
 
     data = Data()
-    train_examples, test_examples = data.load_data_from_dataset('debug',
+    train_examples, test_examples = data.load_data_from_dataset('base',
                                                               'base', embedding_file,
                                   data_file)
 
@@ -338,18 +376,13 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 100, 5)
+    classifier = RNN(300, 600, 5, .1, .00043)
     #criterion = torch.nn.NLLLoss()
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.001,
-                                weight_decay=0.1)
     #learning_rate = .01
-    total_loss = []
-    for epoch in range(0,1):
+    total_loss = [0] * 100
+    for epoch in range(0,2):
         for i in train_examples:
             hidden = classifier.init_hidden()
-
-            optimizer.zero_grad()
 
             sequence = train_examples[i]['sequence']
             outputs = []
@@ -361,25 +394,24 @@ def main():
 
             #output = sum(outputs)/len(outputs)
             target = train_examples[i]['target']
-            loss = criterion(output, target)
-            total_loss.append(loss.item())
+            loss = classifier.backward(output, target)
 
+            k = i%100
+            total_loss[k] = loss.item()
             average_loss = sum(total_loss)/len(total_loss)
             print(i, loss.item(), average_loss, target, output)
-            if i % 99 == 1:
-                total_loss = []
-            loss.backward()
 
-            # Add parameters' gradients to their values, multiplied by learning rate
-            #for p in classifier.parameters():
-            #    p.data.add_(-learning_rate, p.grad.data)
-            optimizer.step()
         plot(total_loss)
         result = score_model(classifier, test_examples,
                              data)
-        #results['result'] = result
-        #results['metadata'] = data.metadata
-        print(result)
+        results['result'] = result
+        results['data'] = data.metadata
+        results['classifier'] = classifier.metadata
+        print(results)
+        if epoch == 0:
+            save_json(results, 'result2_0')
+        else:
+            save_json(results, 'result2_0')
 
 
 if __name__ == '__main__':
