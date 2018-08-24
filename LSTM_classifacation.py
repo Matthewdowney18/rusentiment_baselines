@@ -25,7 +25,9 @@ class RNN(torch.nn.Module):
         super(RNN, self).__init__()
 
         self.hidden_size = hidden_size
-        self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
+        self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
+        #self.sigmoid = torch.nn.sigmoid()
+        #self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
         self.h2o = torch.nn.Sequential(
             torch.nn.Linear(self.hidden_size, self.hidden_size),
             torch.nn.ELU(),
@@ -41,12 +43,16 @@ class RNN(torch.nn.Module):
         self.metadata['output_size'] = output_size
         self.metadata['weight_decay'] = weight_decay
         self.metadata['lr'] = lr
+        self.metadata['description'] = 'a lstm cell layer that calculates the ' \
+            'hidden state and cell state, and the hidden state is put through a' \
+            ' nn (linear elu linear softmax) for the output. loss:cross entropy' \
+            ' loss, optimizer = SGD'
 
-    def forward(self, input, hidden):
-        combined = torch.cat((input, hidden), 1)
-        hidden = self.i2h(combined)
+    def forward(self, input, hidden, state):
+        #combined = torch.cat((input, hidden), 1)
+        hidden, state = self.lstm(input, (hidden, state))
         output = self.h2o(hidden)
-        return output, hidden
+        return output, hidden, state
 
     def init_hidden(self):
         return torch.zeros(1, self.hidden_size)
@@ -233,7 +239,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 100
+        nb_samples_debug = 5000
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -313,11 +319,12 @@ def score_model(classifier, examples, data):
     y_true = torch.zeros(len(examples))
     for i in examples:
         hidden = classifier.init_hidden()
+        state = classifier.init_hidden()
         sequence = examples[i]['sequence']
         outputs = []
         for j in range(sequence.size()[0]):
             line = torch.FloatTensor(data.scaler.transform(sequence[j]))
-            output, hidden = classifier(line, hidden)
+            output, hidden, state = classifier(line, hidden, state)
             outputs.append(output)
 
             #output = sum(outputs) / len(outputs)
@@ -368,7 +375,7 @@ def main():
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
 
     data = Data()
-    train_examples, test_examples = data.load_data_from_dataset('base',
+    train_examples, test_examples = data.load_data_from_dataset('debug',
                                                               'base', embedding_file,
                                   data_file)
 
@@ -376,20 +383,21 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 600, 5, .1, .00043)
+    classifier = RNN(300, 100, 5, .1, .005)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
     total_loss = [0] * 100
-    for epoch in range(0,2):
+    for epoch in range(0,1):
         for i in train_examples:
             hidden = classifier.init_hidden()
+            state = classifier.init_hidden()
 
             sequence = train_examples[i]['sequence']
             outputs = []
             for j in range(sequence.size()[0]):
 
                 line = torch.FloatTensor(data.scaler.transform(sequence[j]))
-                output, hidden = classifier(line, hidden)
+                output, hidden, state = classifier(line, hidden, state)
                 outputs.append(output)
 
             #output = sum(outputs)/len(outputs)
@@ -409,9 +417,9 @@ def main():
         results['classifier'] = classifier.metadata
         print(results)
         if epoch == 0:
-            save_json(results, 'result2_0')
+            save_json(results, 'result5_0')
         else:
-            save_json(results, 'result2_0')
+            save_json(results, 'result3_1')
 
 
 if __name__ == '__main__':
