@@ -5,6 +5,7 @@ from collections import defaultdict, Counter
 import functools
 from pathlib import Path
 import vecto.embeddings
+import random
 
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
 from sklearn.utils import shuffle
@@ -25,14 +26,14 @@ class RNN(torch.nn.Module):
         super(RNN, self).__init__()
 
         self.hidden_size = hidden_size
-        self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
-        #self.sigmoid = torch.nn.sigmoid()
-        #self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
+        self.drop = torch.nn.Dropout(0.5)
+        #self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
+       # self.sigmoid = torch.nn.Sigmoid()
+        self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
         self.h2o = torch.nn.Sequential(
-            torch.nn.Linear(self.hidden_size, self.hidden_size),
-            torch.nn.ELU(),
-            torch.nn.Linear(self.hidden_size, output_size),
-            torch.nn.LogSoftmax(dim=-1))
+            #torch.nn.Linear(self.hidden_size, self.hidden_size),
+            #torch.nn.ELU(),
+            torch.nn.Linear(self.hidden_size, output_size))
 
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = torch.optim.SGD(self.parameters(), lr=lr,
@@ -43,15 +44,21 @@ class RNN(torch.nn.Module):
         self.metadata['output_size'] = output_size
         self.metadata['weight_decay'] = weight_decay
         self.metadata['lr'] = lr
-        self.metadata['description'] = 'a lstm cell layer that calculates the ' \
-            'hidden state and cell state, and the hidden state is put through a' \
-            ' nn (linear elu linear softmax) for the output. loss:cross entropy' \
-            ' loss, optimizer = SGD'
+        self.metadata['description'] = 'a layer that calculates the hidden ' \
+                                       'state with an lstm cell, and putting ' \
+                                       'that through a linear layer. the new ' \
+                                       'hidden state is put through a nn (' \
+                                       'linear  softmax ) for the ' \
+                                       'output. loss:crossentropy loss, ' \
+                                       'optimizer = SGD, 10 epoch'
 
     def forward(self, input, hidden, state):
-        #combined = torch.cat((input, hidden), 1)
-        hidden, state = self.lstm(input, (hidden, state))
+        input = self.drop(input)
+        combined = torch.cat((input, hidden), 1)
+        hidden = self.i2h(combined)
+        #hidden, state = self.lstm(input, (hidden, state))
         output = self.h2o(hidden)
+        output = F.softmax(output, dim=-1)
         return output, hidden, state
 
     def init_hidden(self):
@@ -78,8 +85,6 @@ class Data:
         metadata = create_data(data_file, mode, labels_mode)
         self.metadata['dataset'] = metadata
 
-
-
         print(f'Data train: {len(samples_train)}')
         print(f'Labels train: {Counter(labels_train)}')
         self.metadata['data train'] = len(samples_train)
@@ -94,13 +99,13 @@ class Data:
         print(f'Labels: {label_encoder.classes_}')
         self.labels = label_encoder.classes_
 
-        train_examples = self.create_data_matrix_embeddings(
+        train_examples = self.create_data_dictionary(
             samples_train, labels_train, embeddings)
         train_examples = self.add_target(train_examples, label_encoder)
         #print(f'Train data: {len(self.X_train)}, {self.y_train.shape}')
         self.metadata['Train data'] = len(train_examples)
 
-        test_examples = self.create_data_matrix_embeddings(
+        test_examples = self.create_data_dictionary(
             samples_test, labels_test, embeddings)
         test_examples = self.add_target(test_examples, label_encoder)
         #print(f'Test data: {len(self.X_test)}, {self.y_test.shape}')
@@ -108,7 +113,7 @@ class Data:
 
         return train_examples, test_examples
 
-    def create_data_matrix_embeddings(self, samples, labels, word_embeddings):
+    def create_data_dictionary(self, samples, labels, word_embeddings):
         embeddings_dim = len(word_embeddings.matrix[0])
         nb_samples = len(samples)
         examples = dict()
@@ -239,7 +244,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 5000
+        nb_samples_debug = 7000
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -350,8 +355,38 @@ def score_model(classifier, examples, data):
                                  pos_label=pos_label)
     results["recall"] = recall_score(y_true, y_pred, average=average,
                             pos_label=pos_label)
-
     return results
+
+def train(classifier, train_examples, data, num_iterations):
+    last_100_loss = [0] * 100
+    total_loss = []
+    for epoch in range(0, num_iterations):
+        keys = list(train_examples.keys())
+        random.shuffle(keys)
+        for i, key in enumerate(keys):
+            hidden = classifier.init_hidden()
+            state = classifier.init_hidden()
+
+            sequence = train_examples[key]['sequence']
+            outputs = []
+
+            for j in range(sequence.size()[0]):
+                line = torch.FloatTensor(data.scaler.transform(sequence[j]))
+                output, hidden, state = classifier(line, hidden, state)
+                outputs.append(output)
+
+            # output = sum(outputs)/len(outputs)
+            target = train_examples[i]['target']
+            loss = classifier.backward(output, target)
+
+            k = i % 100
+            last_100_loss[k] = loss.item()
+            average_loss = sum(last_100_loss) / len(last_100_loss)
+            if k == 0:
+                print(j, i, average_loss, loss.item() , target, output)
+            total_loss.append(average_loss)
+    plot(total_loss)
+    return classifier
 
 def save_json(results, filename):
     basedir = os.path.dirname(
@@ -365,7 +400,6 @@ def save_json(results, filename):
     file.close()
 
 
-
 def main():
     results = dict()
     # Directory with data files (data_base.csv, data_posneg.csv, etc)
@@ -375,7 +409,7 @@ def main():
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
 
     data = Data()
-    train_examples, test_examples = data.load_data_from_dataset('debug',
+    train_examples, test_examples = data.load_data_from_dataset('posneg',
                                                               'base', embedding_file,
                                   data_file)
 
@@ -383,43 +417,30 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 100, 5, .1, .005)
+    classifier = RNN(300, 100, 5, .1, .1)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
-    total_loss = [0] * 100
-    for epoch in range(0,1):
-        for i in train_examples:
-            hidden = classifier.init_hidden()
-            state = classifier.init_hidden()
 
-            sequence = train_examples[i]['sequence']
-            outputs = []
-            for j in range(sequence.size()[0]):
+    epoch = 5
 
-                line = torch.FloatTensor(data.scaler.transform(sequence[j]))
-                output, hidden, state = classifier(line, hidden, state)
-                outputs.append(output)
+    classifier = train(classifier, train_examples, data, epoch)
 
-            #output = sum(outputs)/len(outputs)
-            target = train_examples[i]['target']
-            loss = classifier.backward(output, target)
+    result = score_model(classifier, test_examples, data)
 
-            k = i%100
-            total_loss[k] = loss.item()
-            average_loss = sum(total_loss)/len(total_loss)
-            print(i, loss.item(), average_loss, target, output)
-
-        plot(total_loss)
-        result = score_model(classifier, test_examples,
-                             data)
-        results['result'] = result
-        results['data'] = data.metadata
-        results['classifier'] = classifier.metadata
-        print(results)
-        if epoch == 0:
-            save_json(results, 'result5_0')
-        else:
-            save_json(results, 'result3_1')
+    results['result'] = result
+    results['data'] = data.metadata
+    results['classifier'] = classifier.metadata
+    results['classidier']['epoch'] = epoch
+    print(results)
+    if epoch == 0:
+        save_json(results, 'result12')
+    elif epoch == 1:
+        save_json(results, 'result11_1')
+    elif epoch == 2:
+        save_json(results, 'result11_2')
+    else:
+        save_json(results, 'result14')
+    save_json(results, 'result14')
 
 
 if __name__ == '__main__':
