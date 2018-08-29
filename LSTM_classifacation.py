@@ -27,12 +27,16 @@ class RNN(torch.nn.Module):
 
         self.hidden_size = hidden_size
         self.drop = torch.nn.Dropout(0.5)
-        #self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
-       # self.sigmoid = torch.nn.Sigmoid()
+        self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
+        #self.sigmoid = torch.nn.Sigmoid()
         self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
         self.h2o = torch.nn.Sequential(
-            #torch.nn.Linear(self.hidden_size, self.hidden_size),
-            #torch.nn.ELU(),
+            torch.nn.Linear(self.hidden_size, self.hidden_size),
+            torch.nn.ELU(),
+            torch.nn.Linear(self.hidden_size, self.hidden_size),
+            torch.nn.ELU(),
+            torch.nn.Linear(self.hidden_size, self.hidden_size),
+            torch.nn.ELU(),
             torch.nn.Linear(self.hidden_size, output_size))
 
         self.criterion = torch.nn.CrossEntropyLoss()
@@ -44,19 +48,21 @@ class RNN(torch.nn.Module):
         self.metadata['output_size'] = output_size
         self.metadata['weight_decay'] = weight_decay
         self.metadata['lr'] = lr
-        self.metadata['description'] = 'a layer that calculates the hidden ' \
-                                       'state with an lstm cell, and putting ' \
-                                       'that through a linear layer. the new ' \
+        self.metadata['description'] = 'a rnn that calculates the hidden ' \
+                                       'state with with a linear layer. the ' \
+                                       'new ' \
                                        'hidden state is put through a nn (' \
-                                       'linear  softmax ) for the ' \
-                                       'output. loss:crossentropy loss, ' \
-                                       'optimizer = SGD, 10 epoch'
+                                       'linear elu, linear, elu, ' \
+                                       'linear, elu, linear softmax ) for ' \
+                                       'the output. loss:crossentropy loss, ' \
+                                       'optimizer = SGD, 5 epoch'
 
     def forward(self, input, hidden, state):
-        input = self.drop(input)
-        combined = torch.cat((input, hidden), 1)
-        hidden = self.i2h(combined)
-        #hidden, state = self.lstm(input, (hidden, state))
+        for element in input:
+            element = self.drop(element)
+            combined = torch.cat((element, hidden), 1)
+            hidden = self.i2h(combined)
+            #hidden, state = self.lstm(input, (hidden, state))
         output = self.h2o(hidden)
         output = F.softmax(output, dim=-1)
         return output, hidden, state
@@ -244,7 +250,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 7000
+        nb_samples_debug = 10000
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -314,7 +320,7 @@ def load_data(data_file):
 def plot(total_loss):
     pyplot.plot(total_loss)
     pyplot.title('loss')
-    pyplot.xlabel('epoch')
+    pyplot.xlabel('sample')
     pyplot.ylabel('loss')
     pyplot.show()
 
@@ -326,11 +332,11 @@ def score_model(classifier, examples, data):
         hidden = classifier.init_hidden()
         state = classifier.init_hidden()
         sequence = examples[i]['sequence']
-        outputs = []
-        for j in range(sequence.size()[0]):
-            line = torch.FloatTensor(data.scaler.transform(sequence[j]))
-            output, hidden, state = classifier(line, hidden, state)
-            outputs.append(output)
+        input = []
+        for element in sequence:
+            input.append(torch.FloatTensor(data.scaler.transform(element)))
+
+        output, hidden, state = classifier(input, hidden, state)
 
             #output = sum(outputs) / len(outputs)
 
@@ -360,30 +366,30 @@ def score_model(classifier, examples, data):
 def train(classifier, train_examples, data, num_iterations):
     last_100_loss = [0] * 100
     total_loss = []
+    keys = list(train_examples.keys())
     for epoch in range(0, num_iterations):
-        keys = list(train_examples.keys())
         random.shuffle(keys)
         for i, key in enumerate(keys):
             hidden = classifier.init_hidden()
             state = classifier.init_hidden()
 
             sequence = train_examples[key]['sequence']
-            outputs = []
+            input = list()
+            for element in sequence:
+                input.append(torch.FloatTensor(data.scaler.transform(element)))
 
-            for j in range(sequence.size()[0]):
-                line = torch.FloatTensor(data.scaler.transform(sequence[j]))
-                output, hidden, state = classifier(line, hidden, state)
-                outputs.append(output)
+            output, hidden, state = classifier(input, hidden, state)
 
             # output = sum(outputs)/len(outputs)
-            target = train_examples[i]['target']
+            target = train_examples[key]['target']
             loss = classifier.backward(output, target)
 
             k = i % 100
             last_100_loss[k] = loss.item()
             average_loss = sum(last_100_loss) / len(last_100_loss)
             if k == 0:
-                print(j, i, average_loss, loss.item() , target, output)
+                print(epoch, i, average_loss, '|', len(sequence), loss.item(),
+                      target, output)
             total_loss.append(average_loss)
     plot(total_loss)
     return classifier
@@ -417,7 +423,7 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 100, 5, .1, .1)
+    classifier = RNN(300, 300, 5, .1, .01)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
 
@@ -430,7 +436,7 @@ def main():
     results['result'] = result
     results['data'] = data.metadata
     results['classifier'] = classifier.metadata
-    results['classidier']['epoch'] = epoch
+    results['classifier']['epoch'] = epoch
     print(results)
     if epoch == 0:
         save_json(results, 'result12')
@@ -439,8 +445,8 @@ def main():
     elif epoch == 2:
         save_json(results, 'result11_2')
     else:
-        save_json(results, 'result14')
-    save_json(results, 'result14')
+        save_json(results, 'result20')
+    save_json(results, 'result20')
 
 
 if __name__ == '__main__':
