@@ -31,15 +31,15 @@ class RNN(torch.nn.Module):
         #self.sigmoid = torch.nn.Sigmoid()
         self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
         self.h2o = torch.nn.Sequential(
-            torch.nn.Linear(self.hidden_size, self.hidden_size),
-            torch.nn.ELU(),
-            torch.nn.Linear(self.hidden_size, self.hidden_size),
-            torch.nn.ELU(),
-            torch.nn.Linear(self.hidden_size, self.hidden_size),
-            torch.nn.ELU(),
+        #    torch.nn.Linear(self.hidden_size, self.hidden_size),
+        #    torch.nn.ELU(),
+        #    torch.nn.Linear(self.hidden_size, self.hidden_size),
+        #    torch.nn.ELU(),
+        #    torch.nn.Linear(self.hidden_size, self.hidden_size),
+        #    torch.nn.ELU(),
             torch.nn.Linear(self.hidden_size, output_size))
 
-        self.criterion = torch.nn.CrossEntropyLoss()
+        self.criterion = torch.nn.NLLLoss()
         self.optimizer = torch.optim.SGD(self.parameters(), lr=lr,
                                     weight_decay=weight_decay)
         self.metadata = dict()
@@ -64,7 +64,7 @@ class RNN(torch.nn.Module):
             hidden = self.i2h(combined)
             #hidden, state = self.lstm(input, (hidden, state))
         output = self.h2o(hidden)
-        output = F.softmax(output, dim=-1)
+        output = F.log_softmax(output, dim=-1)
         return output, hidden, state
 
     def init_hidden(self):
@@ -97,6 +97,7 @@ class Data:
         self.metadata['labels train'] = Counter(labels_train)
 
         embeddings = load_embeddings(embedding_file)
+        embeddings.normalize()
         print(f'Word embeddings: {len(embeddings.vocabulary.lst_words)}')
         self.metadata['embedding'] = embeddings.metadata
 
@@ -423,7 +424,7 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 300, 5, .1, .01)
+    classifier = RNN(300, 100, 5, .5, .001)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
 
@@ -438,15 +439,8 @@ def main():
     results['classifier'] = classifier.metadata
     results['classifier']['epoch'] = epoch
     print(results)
-    if epoch == 0:
-        save_json(results, 'result12')
-    elif epoch == 1:
-        save_json(results, 'result11_1')
-    elif epoch == 2:
-        save_json(results, 'result11_2')
-    else:
-        save_json(results, 'result20')
-    save_json(results, 'result20')
+
+    save_json(results, 'result21')
 
 
 if __name__ == '__main__':
