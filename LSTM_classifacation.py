@@ -28,8 +28,15 @@ class RNN(torch.nn.Module):
         self.hidden_size = hidden_size
         self.drop = torch.nn.Dropout(0.5)
         self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
-        #self.sigmoid = torch.nn.Sigmoid()
+        self.hidden_scale = torch.nn.Linear(input_size, hidden_size)
+        self.input_scale = torch.nn.Linear(hidden_size, hidden_size)
+        self.sigmoid = torch.nn.Sigmoid()
+        self.i2h = torch.nn.Sequential(
+                torch.nn.Linear(self.hidden_size+input_size,
+                                self.hidden_size),
+                torch.nn.Sigmoid())
         self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
+        self.normalize = torch.nn.BatchNorm1d(hidden_size)
         self.h2o = torch.nn.Sequential(
         #    torch.nn.Linear(self.hidden_size, self.hidden_size),
         #    torch.nn.ELU(),
@@ -48,21 +55,24 @@ class RNN(torch.nn.Module):
         self.metadata['output_size'] = output_size
         self.metadata['weight_decay'] = weight_decay
         self.metadata['lr'] = lr
-        self.metadata['description'] = 'a rnn that calculates the hidden ' \
-                                       'state with with a linear layer. the ' \
-                                       'new ' \
-                                       'hidden state is put through a nn (' \
-                                       'linear elu, linear, elu, ' \
-                                       'linear, elu, linear softmax ) for ' \
-                                       'the output. loss:crossentropy loss, ' \
+        self.metadata['description'] = 'a rnn that has a dropout layer, ' \
+                                       'calculates the hidden ' \
+                                       'state with with a linear, elu layer. ' \
+                                       'the ' \
+                                       'new hidden state is put through a nn (' \
+                                       'linear softmax ) for ' \
+                                       'the output. loss:NLLL loss, ' \
                                        'optimizer = SGD, 5 epoch'
 
     def forward(self, input, hidden, state):
         for element in input:
             element = self.drop(element)
-            combined = torch.cat((element, hidden), 1)
-            hidden = self.i2h(combined)
-            #hidden, state = self.lstm(input, (hidden, state))
+            element = self.input_scale(element)
+            hidden = self.hidden_scale(hidden)
+            hidden = self.sigmoid(hidden + element)
+            #importance = F.softmax(self.importance(element), dim = -1)
+            #combined = torch.cat((element, hidden), 1)
+            #hidden = self.i2h(combined)
         output = self.h2o(hidden)
         output = F.log_softmax(output, dim=-1)
         return output, hidden, state
@@ -251,7 +261,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 10000
+        nb_samples_debug = 100
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -417,14 +427,14 @@ def main():
 
     data = Data()
     train_examples, test_examples = data.load_data_from_dataset('posneg',
-                                                              'base', embedding_file,
+                                                        'base', embedding_file,
                                   data_file)
 
     #scaler = StandardScaler()
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 100, 5, .5, .001)
+    classifier = RNN(300, 300, 5, .2, .001)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
 
@@ -440,7 +450,7 @@ def main():
     results['classifier']['epoch'] = epoch
     print(results)
 
-    save_json(results, 'result21')
+    save_json(results, 'result25')
 
 
 if __name__ == '__main__':
