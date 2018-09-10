@@ -30,12 +30,11 @@ class RNN(torch.nn.Module):
         self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
         self.hidden_scale = torch.nn.Linear(input_size, hidden_size)
         self.input_scale = torch.nn.Linear(hidden_size, hidden_size)
-        self.sigmoid = torch.nn.Sigmoid()
-        self.i2h = torch.nn.Sequential(
-                torch.nn.Linear(self.hidden_size+input_size,
-                                self.hidden_size),
-                torch.nn.Sigmoid())
-        self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
+        self.importance = torch.nn.linear(input_size, 1)
+        #self.sigmoid = torch.nn.Tanh()
+        self.i2h = torch.nn.Sequential(torch.nn.Linear(
+            self.hidden_size+input_size, self.hidden_size),torch.nn.ELU())
+        #self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
         self.normalize = torch.nn.BatchNorm1d(hidden_size)
         self.h2o = torch.nn.Sequential(
         #    torch.nn.Linear(self.hidden_size, self.hidden_size),
@@ -57,22 +56,24 @@ class RNN(torch.nn.Module):
         self.metadata['lr'] = lr
         self.metadata['description'] = 'a rnn that has a dropout layer, ' \
                                        'calculates the hidden ' \
-                                       'state with with a linear, elu layer. ' \
+                                       'state with with a linear, ' \
+                                       'sigmoid layer. ' \
                                        'the ' \
                                        'new hidden state is put through a nn (' \
                                        'linear softmax ) for ' \
                                        'the output. loss:NLLL loss, ' \
-                                       'optimizer = SGD, 5 epoch'
+                                       'optimizer = SGD, 50 epoch'
 
     def forward(self, input, hidden, state):
         for element in input:
             element = self.drop(element)
-            element = self.input_scale(element)
-            hidden = self.hidden_scale(hidden)
-            hidden = self.sigmoid(hidden + element)
-            #importance = F.softmax(self.importance(element), dim = -1)
-            #combined = torch.cat((element, hidden), 1)
-            #hidden = self.i2h(combined)
+            #element = self.input_scale(element)
+            #hidden = self.hidden_scale(hidden)
+            #hidden = self.sigmoid(hidden + element)
+            importance = F.softmax(self.importance(element), dim = -1)
+            element = element*importance
+            combined = torch.cat((element, hidden), 1)
+            hidden = self.i2h(combined)
         output = self.h2o(hidden)
         output = F.log_softmax(output, dim=-1)
         return output, hidden, state
@@ -261,7 +262,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 100
+        nb_samples_debug = 10
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -434,11 +435,11 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 300, 5, .2, .001)
+    classifier = RNN(300, 3000, 5, .2, .00001)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
 
-    epoch = 5
+    epoch = 50
 
     classifier = train(classifier, train_examples, data, epoch)
 
@@ -450,7 +451,7 @@ def main():
     results['classifier']['epoch'] = epoch
     print(results)
 
-    save_json(results, 'result25')
+    save_json(results, 'result28')
 
 
 if __name__ == '__main__':
