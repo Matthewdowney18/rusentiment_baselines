@@ -27,27 +27,28 @@ class RNN(torch.nn.Module):
 
         self.hidden_size = hidden_size
         self.drop = torch.nn.Dropout(0.5)
-        self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
-        self.hidden_scale = torch.nn.Linear(input_size, hidden_size)
-        self.input_scale = torch.nn.Linear(hidden_size, hidden_size)
-        self.importance = torch.nn.linear(input_size, 1)
-        #self.sigmoid = torch.nn.Tanh()
-        self.i2h = torch.nn.Sequential(torch.nn.Linear(
-            self.hidden_size+input_size, self.hidden_size),torch.nn.ELU())
-        #self.i2h = torch.nn.Linear(input_size + hidden_size, hidden_size)
-        self.normalize = torch.nn.BatchNorm1d(hidden_size)
+        #self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
+        #self.hidden_scale = torch.nn.Linear(input_size, hidden_size)
+        #self.input_scale = torch.nn.Linear(hidden_size, hidden_size)
+        self.importance = torch.nn.Linear(input_size, 1)
+        self.i2h = torch.nn.Sequential(
+            torch.nn.Linear(self.hidden_size+input_size, self.hidden_size))
+            #,torch.nn.ELU())
+        #self.normalize = torch.nn.BatchNorm1d(hidden_size)
         self.h2o = torch.nn.Sequential(
         #    torch.nn.Linear(self.hidden_size, self.hidden_size),
         #    torch.nn.ELU(),
         #    torch.nn.Linear(self.hidden_size, self.hidden_size),
         #    torch.nn.ELU(),
-        #    torch.nn.Linear(self.hidden_size, self.hidden_size),
-        #    torch.nn.ELU(),
+            torch.nn.Linear(self.hidden_size, self.hidden_size),
+            torch.nn.ELU(),
             torch.nn.Linear(self.hidden_size, output_size))
 
         self.criterion = torch.nn.NLLLoss()
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=lr,
-                                    weight_decay=weight_decay)
+        self.optimizer = torch.optim.Adam(
+            self.parameters(), lr=lr, weight_decay=weight_decay)
+        #self.optimizer = torch.optim.SGD(
+        #   self.parameters(), lr=lr, weight_decay=weight_decay)
         self.metadata = dict()
         self.metadata['input_size'] = input_size
         self.metadata['hidden_size'] = hidden_size
@@ -57,10 +58,10 @@ class RNN(torch.nn.Module):
         self.metadata['description'] = 'a rnn that has a dropout layer, ' \
                                        'calculates the hidden ' \
                                        'state with with a linear, ' \
-                                       'sigmoid layer. ' \
+                                       ' layer. ' \
                                        'the ' \
                                        'new hidden state is put through a nn (' \
-                                       'linear softmax ) for ' \
+                                       'linear elu linear logsoftmax ) for ' \
                                        'the output. loss:NLLL loss, ' \
                                        'optimizer = SGD, 50 epoch'
 
@@ -262,7 +263,7 @@ def create_data(data_file, mode, labels_mode):
         labels_train = labels_base_train[
                        :-nb_replace] + labels_posneg_train
     elif mode == 'debug':
-        nb_samples_debug = 10
+        nb_samples_debug = 1000
         samples_train = samples_base_train[:nb_samples_debug]
         labels_train = labels_base_train[:nb_samples_debug]
     elif mode == 'sample':
@@ -336,6 +337,21 @@ def plot(total_loss):
     pyplot.ylabel('loss')
     pyplot.show()
 
+def get_accuracy(targets, outputs):
+    results = dict()
+    outputs = torch.max(outputs, 1)
+    for i in range(0, 5):
+        class_outputs = torch.zeros(targets.size())
+        class_targets = torch.zeros(targets.size())
+        for j, output in enumerate(outputs[1]):
+            if output == i:
+                class_outputs[j] = 1
+            if targets[j] == i:
+                class_targets[j] = 1
+        results['class ' + str(i)] = accuracy_score(class_targets,
+                                                    class_outputs)
+    return results
+
 
 def score_model(classifier, examples, data):
     y_pred = torch.zeros(len(examples))
@@ -377,6 +393,8 @@ def score_model(classifier, examples, data):
 
 def train(classifier, train_examples, data, num_iterations):
     last_100_loss = [0] * 100
+    last_100_outputs = torch.zeros(100, 5)
+    last_100_targets = torch.zeros(100, 1)
     total_loss = []
     keys = list(train_examples.keys())
     for epoch in range(0, num_iterations):
@@ -388,7 +406,7 @@ def train(classifier, train_examples, data, num_iterations):
             sequence = train_examples[key]['sequence']
             input = list()
             for element in sequence:
-                input.append(torch.FloatTensor(data.scaler.transform(element)))
+                input.append(torch.FloatTensor(element))
 
             output, hidden, state = classifier(input, hidden, state)
 
@@ -398,10 +416,15 @@ def train(classifier, train_examples, data, num_iterations):
 
             k = i % 100
             last_100_loss[k] = loss.item()
+            last_100_outputs[k] = output
+            last_100_targets[k] = target
             average_loss = sum(last_100_loss) / len(last_100_loss)
-            if k == 0:
+            if k == 0 and i > 50:
                 print(epoch, i, average_loss, '|', len(sequence), loss.item(),
                       target, output)
+                accuracy = get_accuracy(last_100_targets, last_100_outputs)
+
+                print(accuracy)
             total_loss.append(average_loss)
     plot(total_loss)
     return classifier
@@ -427,7 +450,7 @@ def main():
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
 
     data = Data()
-    train_examples, test_examples = data.load_data_from_dataset('posneg',
+    train_examples, test_examples = data.load_data_from_dataset('debug',
                                                         'base', embedding_file,
                                   data_file)
 
@@ -435,11 +458,11 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 3000, 5, .2, .00001)
+    classifier = RNN(300, 300, 5, .9, .0001)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
 
-    epoch = 50
+    epoch = 5
 
     classifier = train(classifier, train_examples, data, epoch)
 
