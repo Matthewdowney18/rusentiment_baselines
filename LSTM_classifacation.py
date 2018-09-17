@@ -42,8 +42,8 @@ class RNN(torch.nn.Module):
         #    torch.nn.ELU(),
         #    torch.nn.Linear(self.hidden_size, self.hidden_size),
         #    torch.nn.ELU(),
-            torch.nn.Linear(self.hidden_size, self.hidden_size),
-            torch.nn.ELU(),
+        #    torch.nn.Linear(self.hidden_size, self.hidden_size),
+        #    torch.nn.ELU(),
             torch.nn.Linear(self.hidden_size, output_size))
 
         self.criterion = torch.nn.NLLLoss()
@@ -68,9 +68,9 @@ class RNN(torch.nn.Module):
                                        'the hidden state is initialized as ' \
                                        'random numbers' \
                                        'new hidden state is put through a nn (' \
-                                       ' linear elu linear logsoftmax ) for ' \
+                                       '  linear logsoftmax ) for ' \
                                        'the output. loss:NLLL loss, ' \
-                                       'optimizer = sgd, 1 epoch'
+                                       'optimizer =  standard(none), 1 epoch'
 
     def forward(self, input, hidden, state):
         for element in input:
@@ -94,10 +94,10 @@ class RNN(torch.nn.Module):
         self.optimizer.zero_grad()
         loss = self.criterion(output, target)
         loss.backward()
-        self.optimizer.step()
+        #self.optimizer.step()
         # Add parameters' gradients to their values, multiplied by learning rate
-        # for p in classifier.parameters():
-        #    p.data.add_(-learning_rate, p.grad.data)
+        for p in self.parameters():
+            p.data.add_(-.00001, p.grad.data)
         return loss
 
 class Data:
@@ -396,7 +396,7 @@ def score_model(classifier, examples, data):
         average = 'weighted'
         pos_label = 1
 
-    confusion = confusion_matrix(y_true, y_pred, labels=labels)
+    confusion = confusion_matrix(y_true, y_pred)
     plot_confusion(confusion)
 
     results = dict()
@@ -462,6 +462,7 @@ def main():
     results = dict()
     # Directory with data files (data_base.csv, data_posneg.csv, etc)
     data_file = Path('./')
+    print('fag')
 
     # Path to a folder that has embedding file within
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
@@ -474,11 +475,11 @@ def main():
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 100, 5, .1, .001)
+    classifier = RNN(300, 100, 5, .1, .00001)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
 
-    epoch = 1
+    epoch = 20
 
     classifier = train(classifier, train_examples, data, epoch)
 
@@ -490,7 +491,7 @@ def main():
     results['classifier']['epoch'] = epoch
     print(results)
 
-    save_json(results, 'result28')
+    save_json(results, 'result29')
 
 
 if __name__ == '__main__':
