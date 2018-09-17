@@ -30,11 +30,13 @@ class RNN(torch.nn.Module):
         #self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
         #self.hidden_scale = torch.nn.Linear(input_size, hidden_size)
         #self.input_scale = torch.nn.Linear(hidden_size, hidden_size)
-        self.importance = torch.nn.Linear(input_size, 1)
+        self.importance = torch.nn.Sequential(
+            torch.nn.Linear(input_size, 1),
+            torch.nn.Tanh())
         self.i2h = torch.nn.Sequential(
-            torch.nn.Linear(self.hidden_size+input_size, self.hidden_size))
-            #,torch.nn.ELU())
-        #self.normalize = torch.nn.BatchNorm1d(hidden_size)
+            torch.nn.Linear(self.hidden_size+input_size, self.hidden_size),
+            torch.nn.ELU())
+
         self.h2o = torch.nn.Sequential(
         #    torch.nn.Linear(self.hidden_size, self.hidden_size),
         #    torch.nn.ELU(),
@@ -45,10 +47,11 @@ class RNN(torch.nn.Module):
             torch.nn.Linear(self.hidden_size, output_size))
 
         self.criterion = torch.nn.NLLLoss()
-        self.optimizer = torch.optim.Adam(
-            self.parameters(), lr=lr, weight_decay=weight_decay)
-        #self.optimizer = torch.optim.SGD(
-        #   self.parameters(), lr=lr, weight_decay=weight_decay)
+        #self.optimizer = torch.optim.Adam(
+        #    self.parameters(), lr=lr, weight_decay=weight_decay)
+
+        self.optimizer = torch.optim.SGD(
+           self.parameters(), lr=lr, weight_decay=weight_decay)
         self.metadata = dict()
         self.metadata['input_size'] = input_size
         self.metadata['hidden_size'] = hidden_size
@@ -56,14 +59,18 @@ class RNN(torch.nn.Module):
         self.metadata['weight_decay'] = weight_decay
         self.metadata['lr'] = lr
         self.metadata['description'] = 'a rnn that has a dropout layer, ' \
+                                       'and the imput embedding is ' \
+                                       'manipulated with an importance ' \
+                                       'factor(linear, tanh).' \
                                        'calculates the hidden ' \
-                                       'state with with a linear, ' \
+                                       'state with with a linear' \
                                        ' layer. ' \
-                                       'the ' \
+                                       'the hidden state is initialized as ' \
+                                       'random numbers' \
                                        'new hidden state is put through a nn (' \
-                                       'linear elu linear logsoftmax ) for ' \
+                                       ' linear elu linear logsoftmax ) for ' \
                                        'the output. loss:NLLL loss, ' \
-                                       'optimizer = SGD, 50 epoch'
+                                       'optimizer = sgd, 1 epoch'
 
     def forward(self, input, hidden, state):
         for element in input:
@@ -71,7 +78,8 @@ class RNN(torch.nn.Module):
             #element = self.input_scale(element)
             #hidden = self.hidden_scale(hidden)
             #hidden = self.sigmoid(hidden + element)
-            importance = F.softmax(self.importance(element), dim = -1)
+            importance = self.importance(element)
+            #importance = F.softmax(self.importance(element), dim = -1)
             element = element*importance
             combined = torch.cat((element, hidden), 1)
             hidden = self.i2h(combined)
@@ -337,6 +345,13 @@ def plot(total_loss):
     pyplot.ylabel('loss')
     pyplot.show()
 
+def plot_confusion(confusion_matrix):
+    pyplot.imshow(confusion_matrix)
+    pyplot.title('confusion')
+    pyplot.xlabel('sample')
+    pyplot.ylabel('loss')
+    pyplot.show()
+
 def get_accuracy(targets, outputs):
     results = dict()
     outputs = torch.max(outputs, 1)
@@ -381,6 +396,9 @@ def score_model(classifier, examples, data):
         average = 'weighted'
         pos_label = 1
 
+    confusion = confusion_matrix(y_true, y_pred, labels=labels)
+    plot_confusion(confusion)
+
     results = dict()
     results["accuracy"] = accuracy_score(y_true, y_pred)
     results["f1"] = f1_score(y_true, y_pred, average=average,
@@ -423,7 +441,6 @@ def train(classifier, train_examples, data, num_iterations):
                 print(epoch, i, average_loss, '|', len(sequence), loss.item(),
                       target, output)
                 accuracy = get_accuracy(last_100_targets, last_100_outputs)
-
                 print(accuracy)
             total_loss.append(average_loss)
     plot(total_loss)
@@ -450,19 +467,18 @@ def main():
     embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
 
     data = Data()
-    train_examples, test_examples = data.load_data_from_dataset('debug',
-                                                        'base', embedding_file,
-                                  data_file)
+    train_examples, test_examples = data.load_data_from_dataset(
+        'posneg', 'base', embedding_file, data_file)
 
     #scaler = StandardScaler()
     #scaler.fit(data.X_train)
     #scaler.fit(data.X_test)
 
-    classifier = RNN(300, 300, 5, .9, .0001)
+    classifier = RNN(300, 100, 5, .1, .001)
     #criterion = torch.nn.NLLLoss()
     #learning_rate = .01
 
-    epoch = 5
+    epoch = 1
 
     classifier = train(classifier, train_examples, data, epoch)
 
