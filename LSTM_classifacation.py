@@ -1,6 +1,7 @@
 import csv
 import os
 import json
+import pandas as pd
 from collections import defaultdict, Counter
 import functools
 from pathlib import Path
@@ -30,6 +31,8 @@ class RNN(torch.nn.Module):
         #self.lstm = torch.nn.LSTMCell(input_size, hidden_size)
         #self.hidden_scale = torch.nn.Linear(input_size, hidden_size)
         #self.input_scale = torch.nn.Linear(hidden_size, hidden_size)
+
+        #
         self.importance = torch.nn.Sequential(
             torch.nn.Linear(input_size, 1),
             torch.nn.Tanh())
@@ -47,11 +50,11 @@ class RNN(torch.nn.Module):
             torch.nn.Linear(self.hidden_size, output_size))
 
         self.criterion = torch.nn.NLLLoss()
-        #self.optimizer = torch.optim.Adam(
-        #    self.parameters(), lr=lr, weight_decay=weight_decay)
+        self.optimizer = torch.optim.Adam(
+            self.parameters(), lr=lr, weight_decay=weight_decay)
 
-        self.optimizer = torch.optim.SGD(
-           self.parameters(), lr=lr, weight_decay=weight_decay)
+        #self.optimizer = torch.optim.SGD(
+        #   self.parameters(), lr=lr, weight_decay=weight_decay)
         self.metadata = dict()
         self.metadata['input_size'] = input_size
         self.metadata['hidden_size'] = hidden_size
@@ -70,7 +73,7 @@ class RNN(torch.nn.Module):
                                        'new hidden state is put through a nn (' \
                                        '  linear logsoftmax ) for ' \
                                        'the output. loss:NLLL loss, ' \
-                                       'optimizer =  standard(none), 1 epoch'
+                                       'optimizer =  adam, 5 epoch'
 
     def forward(self, input, hidden, state):
         for element in input:
@@ -78,9 +81,9 @@ class RNN(torch.nn.Module):
             #element = self.input_scale(element)
             #hidden = self.hidden_scale(hidden)
             #hidden = self.sigmoid(hidden + element)
-            importance = self.importance(element)
+            #importance = self.importance(element)
             #importance = F.softmax(self.importance(element), dim = -1)
-            element = element*importance
+            #element = element*importance
             combined = torch.cat((element, hidden), 1)
             hidden = self.i2h(combined)
         output = self.h2o(hidden)
@@ -88,16 +91,16 @@ class RNN(torch.nn.Module):
         return output, hidden, state
 
     def init_hidden(self):
-        return torch.zeros(1, self.hidden_size)
+        return torch.randn(1, self.hidden_size)
 
     def backward(self, output, target):
         self.optimizer.zero_grad()
         loss = self.criterion(output, target)
         loss.backward()
-        #self.optimizer.step()
+        self.optimizer.step()
         # Add parameters' gradients to their values, multiplied by learning rate
-        for p in self.parameters():
-            p.data.add_(-.00001, p.grad.data)
+        #for p in self.parameters():
+        #    p.data.add_(-.0009, p.grad.data)
         return loss
 
 class Data:
@@ -338,12 +341,21 @@ def load_data(data_file):
             labels.append(label)
     return samples, labels
 
-def plot(total_loss):
+def plot_loss(total_loss):
+    pyplot.figure(0)
     pyplot.plot(total_loss)
     pyplot.title('loss')
     pyplot.xlabel('sample')
     pyplot.ylabel('loss')
     pyplot.show()
+
+def plot_accuracy(accuracy):
+    df = pd.DataFrame(accuracy)
+    pyplot.figure(1)
+    pyplot.plot(df)
+    pyplot.title('accuracy')
+    pyplot.xlabel('accuracy')
+    pyplot.ylabel('samples * 100')
 
 def plot_confusion(confusion_matrix):
     pyplot.imshow(confusion_matrix)
@@ -414,6 +426,7 @@ def train(classifier, train_examples, data, num_iterations):
     last_100_outputs = torch.zeros(100, 5)
     last_100_targets = torch.zeros(100, 1)
     total_loss = []
+    total_accuracy = []
     keys = list(train_examples.keys())
     for epoch in range(0, num_iterations):
         random.shuffle(keys)
@@ -442,8 +455,10 @@ def train(classifier, train_examples, data, num_iterations):
                       target, output)
                 accuracy = get_accuracy(last_100_targets, last_100_outputs)
                 print(accuracy)
+                total_accuracy.append(accuracy)
             total_loss.append(average_loss)
-    plot(total_loss)
+    plot_accuracy(total_accuracy)
+    plot_loss(total_loss)
     return classifier
 
 def save_json(results, filename):
@@ -462,24 +477,18 @@ def main():
     results = dict()
     # Directory with data files (data_base.csv, data_posneg.csv, etc)
     data_file = Path('./')
-    print('fag')
 
     # Path to a folder that has embedding file within
-    embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
+    #embedding_file = '/home/mattd/projects/tmp/sentiment/fasttext/'
+    embedding_file = '/home/mattd/pycharm/sentiment/fasttext/'
 
     data = Data()
     train_examples, test_examples = data.load_data_from_dataset(
         'posneg', 'base', embedding_file, data_file)
 
-    #scaler = StandardScaler()
-    #scaler.fit(data.X_train)
-    #scaler.fit(data.X_test)
+    classifier = RNN(300, 300, 5, 0.03, .0001)
 
-    classifier = RNN(300, 100, 5, .1, .00001)
-    #criterion = torch.nn.NLLLoss()
-    #learning_rate = .01
-
-    epoch = 20
+    epoch = 5
 
     classifier = train(classifier, train_examples, data, epoch)
 
@@ -491,7 +500,7 @@ def main():
     results['classifier']['epoch'] = epoch
     print(results)
 
-    save_json(results, 'result29')
+    save_json(results, 'result33')
 
 
 if __name__ == '__main__':
